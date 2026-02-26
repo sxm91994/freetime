@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>节奏偏移分析器</title>
+  <style>
+    :root {
+      --bg: #05070d;
+      --panel: rgba(9, 12, 22, 0.78);
+      --line: #2e3a5f;
+      --accent: #76b8ff;
+      --good: #57f287;
+      --text: #e9efff;
+      --muted: #a3b2d8;
+      --hot: #ffd166;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Inter", "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at 20% 20%, #111930 0%, var(--bg) 55%);
+      overflow: hidden;
+    }
+
+    #wave {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      opacity: 0.65;
+    }
+
+    .app {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      gap: 20px;
+    }
+
+    .hud {
+      width: min(950px, 94vw);
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 14px;
+      backdrop-filter: blur(5px);
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .hud strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .grid-wrap {
+      display: grid;
+      place-items: center;
+      width: min(950px, 94vw);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 22px;
+      backdrop-filter: blur(5px);
+    }
+
+    .keypad {
+      width: min(72vmin, 560px);
+      aspect-ratio: 3 / 2.7;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 12px;
+      position: relative;
+    }
+
+    .key {
+      border: 1px solid #3f4e78;
+      border-radius: 12px;
+      background: linear-gradient(165deg, rgba(26, 34, 60, 0.82), rgba(9, 13, 25, 0.9));
+      display: grid;
+      place-items: center;
+      color: #c6d4fa;
+      font-size: clamp(20px, 3.4vmin, 32px);
+      letter-spacing: 0.8px;
+      transition: box-shadow 100ms linear, border-color 100ms linear, transform 100ms linear;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .key.active {
+      border-color: #9ac9ff;
+      box-shadow: 0 0 24px rgba(118, 184, 255, 0.45), inset 0 0 22px rgba(90, 158, 255, 0.22);
+      transform: translateY(-1px);
+    }
+
+    .marker {
+      width: 64%;
+      aspect-ratio: 1;
+      opacity: 0;
+      filter: drop-shadow(0 0 10px rgba(255, 210, 102, 0.65));
+      transition: opacity 80ms linear;
+    }
+
+    .marker.on {
+      opacity: 1;
+    }
+
+    .touch-label {
+      position: absolute;
+      bottom: 6px;
+      font-size: clamp(10px, 1.3vmin, 12px);
+      color: var(--good);
+      letter-spacing: 1.2px;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity 40ms linear, transform 40ms linear;
+      font-weight: 700;
+    }
+
+    .touch-label.on {
+      opacity: 1;
+      transform: translateY(0px);
+    }
+
+    .stats {
+      width: min(950px, 94vw);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 16px;
+      backdrop-filter: blur(5px);
+      color: var(--muted);
+      font-size: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+    }
+
+    .stats b { color: var(--text); }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid #47629e;
+      background: #1c2a4a;
+      color: #eaf2ff;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:hover { filter: brightness(1.1); }
+
+    input[type="number"] {
+      width: 88px;
+      border-radius: 8px;
+      border: 1px solid #3b4f82;
+      background: #0f172d;
+      color: #e9efff;
+      padding: 7px 9px;
+    }
+
+    .hint { color: #9cb2e3; }
+    .hot { color: var(--hot); }
+  </style>
+</head>
+<body>
+  <canvas id="wave"></canvas>
+  <main class="app">
+    <section class="hud">
+      <div><strong>顺序：</strong><span class="hot">1→4→7→8→9→6→3→2→1</span></div>
+      <div><strong>判定窗：</strong>±25ms 显示 TOUCH</div>
+      <div><strong>支持键：</strong>数字主键区 / 小键盘</div>
+    </section>
+
+    <section class="grid-wrap">
+      <div id="keypad" class="keypad"></div>
+    </section>
+
+    <section class="stats">
+      <div class="controls">
+        <label>BPM <input id="bpm" type="number" min="30" max="300" value="120"/></label>
+        <button id="startBtn">开始</button>
+        <button id="stopBtn">暂停</button>
+        <button id="resetBtn">清空记录</button>
+        <span class="hint">按对应数字键记录偏移：负值=早押，正值=晚押</span>
+      </div>
+      <div class="stats-grid">
+        <div>样本数：<b id="count">0</b></div>
+        <div>偏移均值：<b id="mean">0.00 ms</b></div>
+        <div>偏移标准差：<b id="sd">0.00 ms</b></div>
+        <div>最近一次：<b id="latest">-</b></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const sequence = [1, 4, 7, 8, 9, 6, 3, 2, 1];
+    const keypadOrder = [7, 8, 9, 4, 5, 6, 1, 2, 3];
+
+    const state = {
+      bpm: 120,
+      beatMs: 500,
+      running: false,
+      startTime: 0,
+      scheduledIdx: 0,
+      activeDigit: null,
+      offsets: []
+    };
+
+    const keypadEl = document.getElementById('keypad');
+    const bpmEl = document.getElementById('bpm');
+    const countEl = document.getElementById('count');
+    const meanEl = document.getElementById('mean');
+    const sdEl = document.getElementById('sd');
+    const latestEl = document.getElementById('latest');
+
+    const keyMap = new Map();
+
+    function pentagonSVG() {
+      return `<svg class="marker" viewBox="0 0 100 100" aria-hidden="true">
+        <polygon points="50,8 92,38 76,88 24,88 8,38" fill="rgba(255, 209, 102, 0.18)" stroke="#ffd166" stroke-width="5" />
+      </svg>`;
+    }
+
+    function createKey(digit) {
+      const el = document.createElement('div');
+      el.className = 'key';
+      el.dataset.digit = String(digit);
+      el.innerHTML = `<span>${digit}</span>${pentagonSVG()}<span class="touch-label">TOUCH</span>`;
+      keyMap.set(digit, el);
+      return el;
+    }
+
+    keypadOrder.forEach(n => keypadEl.appendChild(createKey(n)));
+
+    function recalcBeat() {
+      state.bpm = Number(bpmEl.value) || 120;
+      state.beatMs = 60000 / state.bpm;
+    }
+
+    function targetForStep(idx) {
+      const t = state.startTime + idx * state.beatMs;
+      return { digit: sequence[idx % sequence.length], time: t };
+    }
+
+    function clearActive() {
+      if (state.activeDigit !== null) {
+        const prev = keyMap.get(state.activeDigit);
+        if (prev) {
+          prev.classList.remove('active');
+          prev.querySelector('.marker')?.classList.remove('on');
+          prev.querySelector('.touch-label')?.classList.remove('on');
+        }
+      }
+    }
+
+    function animate(now) {
+      drawWave(now);
+
+      if (state.running) {
+        const expected = targetForStep(state.scheduledIdx);
+
+        if (now >= expected.time) {
+          clearActive();
+          state.activeDigit = expected.digit;
+          const node = keyMap.get(expected.digit);
+          if (node) {
+            node.classList.add('active');
+            const marker = node.querySelector('.marker');
+            marker.classList.add('on');
+            marker.style.animation = `poly ${state.beatMs}ms linear 1`;
+          }
+          state.scheduledIdx += 1;
+        }
+
+        const activeTarget = targetForStep(Math.max(0, state.scheduledIdx - 1));
+        const dt = now - activeTarget.time;
+        const activeNode = keyMap.get(activeTarget.digit);
+        if (activeNode) {
+          const touch = activeNode.querySelector('.touch-label');
+          if (Math.abs(dt) <= 25) {
+            touch.classList.add('on');
+          } else {
+            touch.classList.remove('on');
+          }
+        }
+      }
+      requestAnimationFrame(animate);
+    }
+
+    function normalizeKey(k) {
+      if (/^[1-9]$/.test(k)) return Number(k);
+      return null;
+    }
+
+    function pushOffset(val) {
+      state.offsets.push(val);
+      const n = state.offsets.length;
+      const mean = state.offsets.reduce((a, b) => a + b, 0) / n;
+      const variance = state.offsets.reduce((acc, x) => acc + (x - mean) ** 2, 0) / n;
+      const sd = Math.sqrt(variance);
+
+      countEl.textContent = String(n);
+      meanEl.textContent = `${mean.toFixed(2)} ms`;
+      sdEl.textContent = `${sd.toFixed(2)} ms`;
+      latestEl.textContent = `${val >= 0 ? '+' : ''}${val.toFixed(2)} ms`;
+    }
+
+    window.addEventListener('keydown', (ev) => {
+      const digit = normalizeKey(ev.key);
+      if (!digit || !state.running) return;
+
+      const currentStep = Math.max(0, state.scheduledIdx - 1);
+      const target = targetForStep(currentStep);
+      if (digit !== target.digit) return;
+
+      const offset = performance.now() - target.time;
+      pushOffset(offset);
+    });
+
+    function start() {
+      recalcBeat();
+      state.running = true;
+      state.startTime = performance.now() + 600;
+      state.scheduledIdx = 0;
+    }
+
+    function stop() {
+      state.running = false;
+      clearActive();
+      state.activeDigit = null;
+    }
+
+    function resetStats() {
+      state.offsets = [];
+      countEl.textContent = '0';
+      meanEl.textContent = '0.00 ms';
+      sdEl.textContent = '0.00 ms';
+      latestEl.textContent = '-';
+    }
+
+    document.getElementById('startBtn').addEventListener('click', start);
+    document.getElementById('stopBtn').addEventListener('click', stop);
+    document.getElementById('resetBtn').addEventListener('click', resetStats);
+    bpmEl.addEventListener('change', recalcBeat);
+
+    const waveCanvas = document.getElementById('wave');
+    const ctx = waveCanvas.getContext('2d');
+
+    function resizeWave() {
+      const dpr = window.devicePixelRatio || 1;
+      waveCanvas.width = Math.floor(window.innerWidth * dpr);
+      waveCanvas.height = Math.floor(window.innerHeight * dpr);
+      waveCanvas.style.width = `${window.innerWidth}px`;
+      waveCanvas.style.height = `${window.innerHeight}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function drawWave(now) {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      ctx.clearRect(0, 0, w, h);
+
+      const beatPhase = (now % state.beatMs) / state.beatMs;
+      const amplitude = 40 + 16 * Math.sin(beatPhase * Math.PI * 2);
+      const centerY = h * 0.78;
+      const freq = (Math.PI * 2) / w * 1.8;
+
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 8) {
+        const y = centerY + Math.sin(x * freq + beatPhase * Math.PI * 2) * amplitude;
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = 'rgba(118, 184, 255, 0.55)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 8) {
+        const y = centerY + 22 + Math.sin(x * freq + beatPhase * Math.PI * 2 + Math.PI / 4) * (amplitude * 0.65);
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = 'rgba(87, 242, 135, 0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    window.addEventListener('resize', resizeWave);
+    resizeWave();
+
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes poly {
+        0% { transform: scale(0.2) rotate(0deg); opacity: 0.1; }
+        70% { transform: scale(1.02) rotate(180deg); opacity: 0.9; }
+        100% { transform: scale(1.2) rotate(360deg); opacity: 0; }
+      }
+    `;
+    document.head.appendChild(style);
+
+    recalcBeat();
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
